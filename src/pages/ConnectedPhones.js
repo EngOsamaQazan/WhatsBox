@@ -6,7 +6,7 @@ import {
   Chip, Divider, IconButton, CircularProgress, Alert
 } from '@mui/material';
 import { useMessages } from '../context/MessageContext';
-import QRCode from 'qrcode.react';
+import QRCode from 'react-qr-code';
 import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -577,7 +577,7 @@ function ConnectedPhones() {
             ) : qrCode ? (
               <>
                 <Box sx={{ border: '8px solid #25D366', borderRadius: '8px', p: 1, bgcolor: '#fff' }}>
-                  <QRCode value={qrCode} size={256} level="H" renderAs="svg" />
+                  <QRCode value={qrCode} size={256} />
                 </Box>
                 <Typography variant="subtitle1" sx={{ mt: 3, textAlign: 'center', fontWeight: 'bold', color: 'primary.main' }}>
                   افتح واتساب على هاتفك وامسح رمز QR هذا

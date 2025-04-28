@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 const fs = require('fs');
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@adiwajshing/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
 // إنشاء تطبيق Express
@@ -83,33 +83,26 @@ async function updatePhoneStatusInDB(phoneId, status, sessionData = null) {
 async function createWhatsAppClient(phoneId) {
   const sessionDir = path.join(SESSIONS_DIR, phoneId);
   
-  // التأكد من وجود مجلد الجلسة
   if (!fs.existsSync(sessionDir)) {
     fs.mkdirSync(sessionDir, { recursive: true });
   }
   
-  // الحصول على حالة المصادقة
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   
-  // إنشاء واتساب كلاينت
   const sock = makeWASocket({
     printQRInTerminal: true,
     auth: state,
     logger: pino({ level: 'warn' })
   });
   
-  // حفظ معلومات الاعتماد عند التغيير
   sock.ev.on('creds.update', saveCreds);
   
-  // معالجة حدث الاتصال
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     
     if (qr) {
       console.log(`QR Code received for phone ${phoneId}`);
-      // تحديث QR code في قاعدة البيانات
       await updateQRCodeInDB(phoneId, qr);
-      // إرسال QR code إلى العميل عبر Socket.io
       io.emit('qr', { phoneId, qr });
     }
     
@@ -118,33 +111,26 @@ async function createWhatsAppClient(phoneId) {
       console.log(`Connection closed for ${phoneId}. Reconnecting: ${shouldReconnect}`);
       
       if (shouldReconnect) {
-        // إعادة الاتصال
         await updatePhoneStatusInDB(phoneId, 'reconnecting');
         io.emit('reconnecting', { phoneId });
         
-        // حذف العميل الحالي
         delete activeClients[phoneId];
-        // إنشاء عميل جديد
         createWhatsAppClient(phoneId);
       } else {
-        // تحديث الحالة إلى غير نشط
         await updatePhoneStatusInDB(phoneId, 'inactive');
         io.emit('disconnected', { phoneId, reason: 'logged out' });
         
-        // حذف العميل من القائمة النشطة
         delete activeClients[phoneId];
       }
     }
     
     if (connection === 'open') {
       console.log(`Phone ${phoneId} connected successfully`);
-      // تحديث الحالة إلى نشط
       await updatePhoneStatusInDB(phoneId, 'active');
       io.emit('ready', { phoneId });
     }
   });
   
-  // إرجاع عميل واتساب
   return sock;
 }
 
@@ -152,12 +138,10 @@ async function createWhatsAppClient(phoneId) {
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
 
-  // معالجة طلب إضافة رقم جديد
   socket.on('connect_whatsapp', async ({ phoneId, phoneNumber, phoneName }) => {
     try {
       console.log(`Request to connect WhatsApp for phone ${phoneId}`);
       
-      // التحقق من وجود عميل نشط
       if (activeClients[phoneId]) {
         console.log(`Client already exists for phone ${phoneId}`);
         socket.emit('whatsapp_status', { 
@@ -168,7 +152,6 @@ io.on('connection', (socket) => {
         return;
       }
       
-      // تحديث قاعدة البيانات
       await supabase
         .from('connected_phones')
         .upsert({
@@ -181,10 +164,8 @@ io.on('connection', (socket) => {
           last_activity: new Date().toISOString()
         });
       
-      // إرسال حدث بدء التهيئة
       socket.emit('whatsapp_initializing', { phoneId, status: 'initializing' });
       
-      // إنشاء عميل جديد
       const client = await createWhatsAppClient(phoneId);
       activeClients[phoneId] = client;
     } catch (error) {
@@ -196,23 +177,18 @@ io.on('connection', (socket) => {
     }
   });
   
-  // معالجة طلب إرسال رسالة
   socket.on('send_message', async ({ phoneId, to, message, messageId }) => {
     try {
       console.log(`Sending message from phone ${phoneId} to ${to}`);
       
-      // التحقق من وجود عميل نشط
       if (!activeClients[phoneId]) {
         throw new Error(`No active client found for phone ${phoneId}`);
       }
       
-      // تنسيق رقم الهاتف
       const formattedNumber = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
       
-      // إرسال الرسالة
       await activeClients[phoneId].sendMessage(formattedNumber, { text: message });
       
-      // إرسال حدث نجاح الإرسال إلى العميل
       socket.emit('message_sent', { phoneId, messageId });
     } catch (error) {
       console.error(`Error sending message from phone ${phoneId}:`, error);
@@ -220,7 +196,6 @@ io.on('connection', (socket) => {
     }
   });
   
-  // معالجة قطع اتصال العميل
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
   });
