@@ -7,9 +7,17 @@ const fs = require('fs');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const pino = require('pino');
 
-// إنشاء logger مع مستوى تفصيلي أكثر
-const logger = pino({ 
-  level: 'info'
+// إنشاء logger مع transport مباشر لـ pino-pretty
+const logger = pino({
+  level: 'info',
+  transport: {
+    target: 'pino-pretty',
+    options: {
+      colorize: true,
+      translateTime: 'SYS:standard',
+      ignore: 'pid,hostname'
+    }
+  }
 });
 
 // إنشاء تطبيق Express
