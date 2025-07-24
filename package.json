@@ -5,6 +5,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
+    "build": "react-scripts build",
     "dev": "concurrently \"npm start\" \"react-scripts start\""
   },
   "dependencies": {
