@@ -259,13 +259,24 @@ function ConnectedPhones() {
         last_activity: new Date().toISOString()
       };
       
+      // التحقق من اتصال Supabase قبل المحاولة
+      console.log('Attempting to connect to Supabase...');
+      console.log('Supabase URL:', supabase.supabaseUrl);
+      
       // إضافة الرقم إلى قاعدة البيانات
       const { data, error } = await supabase
         .from('connected_phones')
         .insert([phoneData])
         .select();
         
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error:', error);
+        throw new Error(`خطأ في قاعدة البيانات: ${error.message}`);
+      }
+      
+      if (!data || data.length === 0) {
+        throw new Error('لم يتم إرجاع بيانات من قاعدة البيانات');
+      }
       
       // إضافة الرقم إلى حالة التطبيق
       dispatch({ type: 'ADD_CONNECTED_PHONE', payload: data[0] });
@@ -279,7 +290,15 @@ function ConnectedPhones() {
       }
     } catch (error) {
       console.error('Error adding phone:', error);
-      setError(error.message);
+      
+      // تحسين رسائل الخطأ للمستخدم
+      if (error.message.includes('Failed to fetch')) {
+        setError('فشل في الاتصال بالخادم. يرجى التحقق من اتصال الإنترنت والمحاولة مرة أخرى.');
+      } else if (error.message.includes('CORS')) {
+        setError('مشكلة في إعدادات الأمان. يرجى التواصل مع المطور.');
+      } else {
+        setError(error.message || 'حدث خطأ غير متوقع');
+      }
     } finally {
       setIsLoading(false);
     }
