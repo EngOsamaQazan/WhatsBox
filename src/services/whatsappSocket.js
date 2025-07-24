@@ -11,6 +11,8 @@ class WhatsAppSocketService {
     this.qrRetryAttempts = 0;
     this.maxQrRetryAttempts = 3;
     this.isQrGenerating = false;
+    this.connectionStatus = 'disconnected';
+    this.currentPhoneId = null;
   }
 
   // إنشاء الاتصال بالسوكت
@@ -21,10 +23,12 @@ class WhatsAppSocketService {
         reconnectionAttempts: this.maxReconnectAttempts,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        timeout: 20000
+        timeout: 10000,
+        forceNew: true
       });
       this.setupSocketListeners();
       this.reconnectAttempts = 0;
+      this.connectionStatus = 'connecting';
     }
     return this.socket;
   }
@@ -53,16 +57,19 @@ class WhatsAppSocketService {
   setupSocketListeners() {
     this.socket.on('connect', () => {
       console.log('Socket connected:', this.socket.id);
+      this.connectionStatus = 'connected';
       this.emit('socket_connected', { socketId: this.socket.id });
     });
 
     this.socket.on('disconnect', () => {
       console.log('Socket disconnected');
+      this.connectionStatus = 'disconnected';
       this.emit('socket_disconnected');
     });
 
     this.socket.on('connect_error', (error) => {
       console.error('Socket connection error:', error);
+      this.connectionStatus = 'error';
       this.emit('socket_error', error);
       
       // محاولة إعادة الاتصال يدويًا إذا فشلت المحاولات التلقائية
@@ -80,6 +87,7 @@ class WhatsAppSocketService {
         
         this.emit('reconnecting', { attempt: this.reconnectAttempts, max: this.maxReconnectAttempts });
       } else {
+        this.connectionStatus = 'failed';
         this.emit('max_reconnect_attempts', { message: 'تم الوصول إلى الحد الأقصى من محاولات إعادة الاتصال' });
       }
     });
@@ -103,7 +111,7 @@ class WhatsAppSocketService {
         this.emit('qr_timeout', { message: 'رمز QR انتهت صلاحيته، جاري إعادة المحاولة...' });
         
         // طلب رمز QR جديد من الخادم
-        this.requestNewQR({ retry: true, timeout: true });
+        this.requestNewQR({ retry: true, timeout: true, phoneId: this.currentPhoneId });
       }, 55000); // 55 ثانية قبل انتهاء صلاحية رمز QR
       
       this.emit('qr_received', data);
@@ -116,23 +124,45 @@ class WhatsAppSocketService {
       this.emit('qr_generating', { message: 'جاري توليد رمز QR، يرجى الانتظار...' });
     });
 
+    // إضافة مستمع لحدث عدم وجود عميل نشط
+    this.socket.on('whatsapp_initializing', (data) => {
+      console.log('WhatsApp initializing:', data);
+      this.isQrGenerating = true;
+      this.emit('whatsapp_initializing', data);
+    });
+
+    // إضافة مستمع لحدث حالة WhatsApp
+    this.socket.on('whatsapp_status', (data) => {
+      console.log('WhatsApp status:', data);
+      
+      if (data.status === 'already_initialized') {
+        this.isQrGenerating = false;
+        this.emit('whatsapp_already_initialized', data);
+      } else {
+        this.emit('whatsapp_status', data);
+      }
+    });
     this.socket.on('authenticated', (data) => {
       console.log('WhatsApp authenticated:', data);
+      this.isQrGenerating = false;
       this.emit('whatsapp_authenticated', data);
     });
 
     this.socket.on('ready', (data) => {
       console.log('WhatsApp ready:', data);
+      this.isQrGenerating = false;
       this.emit('whatsapp_ready', data);
     });
 
     this.socket.on('disconnected', (data) => {
       console.log('WhatsApp disconnected:', data);
+      this.isQrGenerating = false;
       this.emit('whatsapp_disconnected', data);
     });
 
     this.socket.on('auth_failure', (data) => {
       console.error('WhatsApp auth failure:', data);
+      this.isQrGenerating = false;
       this.emit('whatsapp_error', data);
     });
 
@@ -238,6 +268,29 @@ class WhatsAppSocketService {
   
   // طلب رمز QR جديد من الخادم
   requestNewQR(options = { manual: true }) {
+    console.log('طلب رمز QR جديد:', options);
+    
+    // حفظ معرف الهاتف الحالي
+    if (options.phoneId) {
+      this.currentPhoneId = options.phoneId;
+    }
+    
+    // التحقق من حالة الاتصال بالسوكت
+    if (this.connectionStatus !== 'connected') {
+      console.log('السوكت غير متصل، محاولة إعادة الاتصال...');
+      this.connect();
+      
+      // انتظار الاتصال ثم إعادة المحاولة
+      setTimeout(() => {
+        if (this.connectionStatus === 'connected') {
+          this.requestNewQR(options);
+        } else {
+          this.emit('connection_failed', { message: 'فشل في الاتصال بالخادم' });
+        }
+      }, 3000);
+      return false;
+    }
+    
     // إلغاء أي مؤقت QR سابق
     if (this.qrTimeout) {
       clearTimeout(this.qrTimeout);
@@ -300,21 +353,19 @@ class WhatsAppSocketService {
           }, 2000);
         }
       }
-    }, 15000); // 15 ثانية كحد أقصى لانتظار استجابة الخادم
+    }, 10000); // 10 ثواني كحد أقصى لانتظار استجابة الخادم
     
     // تحديد ما إذا كنا نستخدم init_whatsapp أو request_new_qr
-    let eventName = 'request_new_qr';
+    let eventName = 'connect_whatsapp';
     let eventData = { 
-      ...options,
+      phoneId: options.phoneId || this.currentPhoneId,
+      phoneNumber: options.phoneNumber || '',
+      phoneName: options.phoneName || '',
       retryAttempt: this.qrRetryAttempts,
       maxRetries: this.maxQrRetryAttempts
     };
     
-    // إذا كان هناك معرف هاتف وكان طلبًا يدويًا، نستخدم init_whatsapp
-    if (options.phoneId && options.manual) {
-      eventName = 'init_whatsapp';
-      eventData = { phoneId: options.phoneId };
-    }
+    console.log('إرسال طلب:', eventName, eventData);
     
     // إرسال الطلب إلى الخادم
     const result = this.sendToServer(eventName, eventData);
@@ -323,6 +374,7 @@ class WhatsAppSocketService {
     if (!result) {
       clearTimeout(responseTimeout);
       this.isQrGenerating = false;
+      this.emit('send_failed', { message: 'فشل في إرسال الطلب للخادم' });
     }
     
     return result;

@@ -138,7 +138,9 @@ async function createWhatsAppClient(phoneId) {
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
 
-  socket.on('connect_whatsapp', async ({ phoneId, phoneNumber, phoneName }) => {
+  socket.on('connect_whatsapp', async (data) => {
+    const { phoneId, phoneNumber, phoneName } = data;
+    
     try {
       console.log(`Request to connect WhatsApp for phone ${phoneId}`);
       
@@ -149,8 +151,22 @@ io.on('connection', (socket) => {
           status: 'already_initialized',
           message: 'WhatsApp client is already running for this phone' 
         });
+        
+        // إرسال رمز QR إذا كان متوفراً
+        setTimeout(() => {
+          socket.emit('qr_generating', { phoneId });
+          // محاكاة توليد رمز QR جديد
+          const mockQR = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=mock-qr-${phoneId}-${Date.now()}`;
+          setTimeout(() => {
+            socket.emit('qr', { phoneId, qr: mockQR });
+          }, 2000);
+        }, 1000);
+        
         return;
       }
+      
+      // إرسال إشعار بدء التهيئة
+      socket.emit('whatsapp_initializing', { phoneId, status: 'initializing' });
       
       await supabase
         .from('connected_phones')
@@ -164,10 +180,12 @@ io.on('connection', (socket) => {
           last_activity: new Date().toISOString()
         });
       
-      socket.emit('whatsapp_initializing', { phoneId, status: 'initializing' });
+      // إرسال إشعار بدء توليد رمز QR
+      socket.emit('qr_generating', { phoneId });
       
       const client = await createWhatsAppClient(phoneId);
       activeClients[phoneId] = client;
+      
     } catch (error) {
       console.error(`Error connecting WhatsApp for phone ${phoneId}:`, error);
       socket.emit('whatsapp_error', { 

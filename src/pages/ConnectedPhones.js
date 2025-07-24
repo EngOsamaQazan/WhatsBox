@@ -56,6 +56,10 @@ function ConnectedPhones() {
     whatsAppSocketService.on('requesting_new_qr', handleRequestingNewQR);
     whatsAppSocketService.on('max_qr_retry_attempts', handleMaxQRRetryAttempts);
     whatsAppSocketService.on('qr_generation_timeout', handleQRGenerationTimeout);
+    whatsAppSocketService.on('whatsapp_initializing', handleWhatsAppInitializing);
+    whatsAppSocketService.on('whatsapp_status', handleWhatsAppStatus);
+    whatsAppSocketService.on('connection_failed', handleConnectionFailed);
+    whatsAppSocketService.on('send_failed', handleSendFailed);
     
     // فصل المستمعين عند إزالة المكون
     return () => {
@@ -69,6 +73,10 @@ function ConnectedPhones() {
       whatsAppSocketService.off('requesting_new_qr', handleRequestingNewQR);
       whatsAppSocketService.off('max_qr_retry_attempts', handleMaxQRRetryAttempts);
       whatsAppSocketService.off('qr_generation_timeout', handleQRGenerationTimeout);
+      whatsAppSocketService.off('whatsapp_initializing', handleWhatsAppInitializing);
+      whatsAppSocketService.off('whatsapp_status', handleWhatsAppStatus);
+      whatsAppSocketService.off('connection_failed', handleConnectionFailed);
+      whatsAppSocketService.off('send_failed', handleSendFailed);
     };
   }, []);
   
@@ -125,10 +133,41 @@ function ConnectedPhones() {
     setError(`${data.message || 'انتهت مهلة انتظار توليد رمز QR'} (محاولة ${data.attempt || 1}/${data.maxAttempts || 3})`);
   };
   
+  // معالجة تهيئة WhatsApp
+  const handleWhatsAppInitializing = (data) => {
+    console.log('WhatsApp initializing in component:', data);
+    setIsLoading(true);
+    setError('جاري تهيئة WhatsApp، يرجى الانتظار...');
+  };
+  
+  // معالجة حالة WhatsApp
+  const handleWhatsAppStatus = (data) => {
+    console.log('WhatsApp status in component:', data);
+    if (data.status === 'already_initialized') {
+      setError('العميل مُهيأ بالفعل، جاري طلب رمز QR...');
+    }
+  };
+  
+  // معالجة فشل الاتصال
+  const handleConnectionFailed = (data) => {
+    console.log('Connection failed in component:', data);
+    setIsLoading(false);
+    setError(data.message || 'فشل في الاتصال بالخادم');
+  };
+  
+  // معالجة فشل الإرسال
+  const handleSendFailed = (data) => {
+    console.log('Send failed in component:', data);
+    setIsLoading(false);
+    setError(data.message || 'فشل في إرسال الطلب');
+  };
+  
   // معالجة نجاح التوثيق
   const handleWhatsAppAuthenticated = (data) => {
     console.log('WhatsApp authenticated in component:', data);
     setQrCode('');
+    setIsLoading(false);
+    setError('');
     
     // تحديث حالة الرقم في واجهة المستخدم
     dispatch({ 
@@ -138,13 +177,19 @@ function ConnectedPhones() {
         status: 'active' 
       } 
     });
-    
-    setIsLoading(false);
   };
   
   // معالجة جاهزية واتساب
   const handleWhatsAppReady = (data) => {
     console.log('WhatsApp ready in component:', data);
+    setIsLoading(false);
+    setError('تم الاتصال بنجاح!');
+    
+    // إغلاق مربع الحوار بعد 2 ثانية
+    setTimeout(() => {
+      setOpenDialog(false);
+      setError('');
+    }, 2000);
     
     // تحديث حالة الرقم في واجهة المستخدم
     dispatch({ 
@@ -186,6 +231,8 @@ function ConnectedPhones() {
   
   // فتح مربع حوار QR لربط رقم
   const handleOpenQRDialog = (phoneId) => {
+    console.log('فتح مربع حوار QR للرقم:', phoneId);
+    
     setDialogType('qr');
     setOpenDialog(true);
     setCurrentPhoneId(phoneId);
@@ -193,8 +240,22 @@ function ConnectedPhones() {
     setIsLoading(true);
     setError('جاري تهيئة واتساب، قد تستغرق العملية بضع ثوان...');
     
-    // استخدام الدالة المحسنة لطلب رمز QR جديد
-    whatsAppSocketService.requestNewQR({ manual: true, phoneId: phoneId });
+    // البحث عن بيانات الرقم
+    const phone = connectedPhones.find(p => p.id === phoneId);
+    
+    // طلب رمز QR جديد مع بيانات الرقم
+    const success = whatsAppSocketService.requestNewQR({ 
+      manual: true, 
+      phoneId: phoneId,
+      phoneNumber: phone?.phone_number || '',
+      phoneName: phone?.phone_name || ''
+    });
+    
+    if (!success) {
+      setIsLoading(false);
+      setError('فشل في إرسال الطلب. تأكد من تشغيل الخادم.');
+      return;
+    }
     
     // إعلام المستخدم بأن العملية قد تستغرق بعض الوقت
     setTimeout(() => {
@@ -206,9 +267,10 @@ function ConnectedPhones() {
     // إعداد مؤقت للتحقق من استمرار التحميل لفترة طويلة
     setTimeout(() => {
       if (isLoading && !qrCode) {
-        setError('يبدو أن هناك مشكلة في الاتصال. يمكنك إعادة المحاولة أو إغلاق مربع الحوار والمحاولة مرة أخرى.');
+        setIsLoading(false);
+        setError('انتهت مهلة الانتظار. تأكد من تشغيل الخادم وإعادة المحاولة.');
       }
-    }, 20000);
+    }, 15000);
   };
   
   // إغلاق مربع الحوار
@@ -588,20 +650,17 @@ function ConnectedPhones() {
                 <Typography variant="caption" color="text.secondary" sx={{ mt: 1 }}>
                   قد تستغرق العملية بضع ثوان، يرجى الانتظار
                 </Typography>
-                {/* إضافة زر إعادة المحاولة حتى أثناء التحميل */}
-                {error && error.includes('انتهت مهلة') && (
-                  <Button 
-                    variant="outlined" 
-                    color="primary"
-                    startIcon={<RefreshIcon />}
-                    sx={{ mt: 2 }}
-                    onClick={() => {
-                      whatsAppSocketService.requestNewQR({ manual: true, phoneId: currentPhoneId });
-                    }}
-                  >
-                    إعادة المحاولة
-                  </Button>
-                )}
+                <Button 
+                  variant="outlined" 
+                  color="secondary"
+                  sx={{ mt: 2 }}
+                  onClick={() => {
+                    setIsLoading(false);
+                    setError('تم إلغاء العملية');
+                  }}
+                >
+                  إلغاء
+                </Button>
               </Box>
             ) : qrCode ? (
               <>
@@ -636,8 +695,7 @@ function ConnectedPhones() {
                   color="primary"
                   startIcon={<RefreshIcon />}
                   onClick={() => {
-                    // استخدام الدالة المحسنة لطلب رمز QR جديد
-                    whatsAppSocketService.requestNewQR({ manual: true, phoneId: currentPhoneId });
+                    handleOpenQRDialog(currentPhoneId);
                   }}
                 >
                   إعادة المحاولة
@@ -651,8 +709,17 @@ function ConnectedPhones() {
           {qrCode && (
             <Button 
               onClick={() => {
-                // استخدام الدالة المحسنة لطلب رمز QR جديد
-                whatsAppSocketService.requestNewQR({ manual: true, phoneId: currentPhoneId });
+                setQrCode('');
+                setIsLoading(true);
+                setError('جاري تحديث رمز QR...');
+                
+                const phone = connectedPhones.find(p => p.id === currentPhoneId);
+                whatsAppSocketService.requestNewQR({ 
+                  manual: true, 
+                  phoneId: currentPhoneId,
+                  phoneNumber: phone?.phone_number || '',
+                  phoneName: phone?.phone_name || ''
+                });
               }} 
               variant="outlined"
               color="primary"
