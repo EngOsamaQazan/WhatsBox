@@ -359,6 +359,12 @@ function ConnectedPhones() {
           الأرقام المتصلة
         </Typography>
         
+        {usingFallback && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            يتم استخدام التخزين المحلي حالياً. قد لا تتم مزامنة البيانات مع الخادم.
+          </Alert>
+        )}
+        
         <Button
           variant="contained"
           color="primary"
