@@ -335,63 +335,6 @@ function ConnectedPhones() {
       setError(error.message);
     }
   };
-        
-      if (error) {
-        console.error('Supabase error:', error);
-        throw new Error(`خطأ في قاعدة البيانات: ${error.message}`);
-      }
-      
-      if (!data || data.length === 0) {
-        throw new Error('لم يتم إرجاع بيانات من قاعدة البيانات');
-      }
-      
-      // إضافة الرقم إلى حالة التطبيق
-      dispatch({ type: 'ADD_CONNECTED_PHONE', payload: data[0] });
-      
-      // إغلاق مربع الحوار
-      setOpenDialog(false);
-      
-      // إذا كان نوع الاتصال هو QR، فتح مربع حوار QR
-      if (formData.connectionType === 'qr') {
-        handleOpenQRDialog(phoneId);
-      }
-    } catch (error) {
-      console.error('Error adding phone:', error);
-      
-      // تحسين رسائل الخطأ للمستخدم
-      if (error.message.includes('Failed to fetch')) {
-        setError('فشل في الاتصال بالخادم. يرجى التحقق من اتصال الإنترنت والمحاولة مرة أخرى.');
-      } else if (error.message.includes('CORS')) {
-        setError('مشكلة في إعدادات الأمان. يرجى التواصل مع المطور.');
-      } else {
-        setError(error.message || 'حدث خطأ غير متوقع');
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
-  // حذف رقم
-  const handleDeletePhone = async (phoneId) => {
-    try {
-      // إرسال طلب لفصل الرقم من الخادم
-      whatsAppSocketService.sendToServer('disconnect_whatsapp', { phoneId });
-      
-      // حذف الرقم من قاعدة البيانات
-      const { error } = await supabase
-        .from('connected_phones')
-        .delete()
-        .eq('id', phoneId);
-        
-      if (error) throw error;
-      
-      // حذف الرقم من حالة التطبيق
-      dispatch({ type: 'REMOVE_CONNECTED_PHONE', payload: phoneId });
-    } catch (error) {
-      console.error('Error deleting phone:', error);
-      setError(error.message);
-    }
-  };
   
   // تحديث حالة اتصال الرقم
   const handleToggleConnection = (phone) => {
@@ -415,12 +358,6 @@ function ConnectedPhones() {
         <Typography variant="h4" component="h1" gutterBottom>
           الأرقام المتصلة
         </Typography>
-        
-        {usingFallback && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            يتم استخدام التخزين المحلي حالياً. قد لا تتم مزامنة البيانات مع الخادم.
-          </Alert>
-        )}
         
         <Button
           variant="contained"
