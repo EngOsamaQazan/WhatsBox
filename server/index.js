@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 const fs = require('fs');
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const pino = require('pino');
 
 // إنشاء logger مع مستوى تفصيلي أكثر

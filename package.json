@@ -34,6 +34,7 @@
     "socket.io-client": "^4.7.2",
     "stylis": "^4.3.1",
     "stylis-plugin-rtl": "^2.0.1",
+    "uuid": "^9.0.1",
     "whatsapp-web.js": "^1.31.0",
     "xlsx": "^0.18.5"
   },
