@@ -229,9 +229,9 @@ io.on('connection', (socket) => {
         throw new Error(`No active client found for phone ${phoneId}`);
       }
       
-      const formattedNumber = to.includes('@s.whatsapp.net') ? to : `${to}@s.whatsapp.net`;
+      const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
       
-      await activeClients[phoneId].sendMessage(formattedNumber, { text: message });
+      await activeClients[phoneId].sendMessage(formattedNumber, message);
       
       socket.emit('message_sent', { phoneId, messageId });
     } catch (error) {
