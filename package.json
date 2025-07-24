@@ -4,7 +4,7 @@
   "description": "نظام إرسال رسائل واتساب باستخدام WhatsApp Web API",
   "main": "server/index.js",
   "scripts": {
-    "start": "node server/index.js",
+    "start": "node server/index.js | pino-pretty",
     "dev": "concurrently \"npm start\" \"react-scripts start\""
   },
   "dependencies": {

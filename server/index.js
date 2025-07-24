@@ -9,14 +9,7 @@ const pino = require('pino');
 
 // إنشاء logger مع مستوى تفصيلي أكثر
 const logger = pino({ 
-  level: 'debug',
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true,
-      translateTime: 'SYS:standard'
-    }
-  }
+  level: 'info'
 });
 
 // إنشاء تطبيق Express
