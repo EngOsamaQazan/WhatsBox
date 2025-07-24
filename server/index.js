@@ -7,6 +7,18 @@ const fs = require('fs');
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
+// إنشاء logger مع مستوى تفصيلي أكثر
+const logger = pino({ 
+  level: 'debug',
+  transport: {
+    target: 'pino-pretty',
+    options: {
+      colorize: true,
+      translateTime: 'SYS:standard'
+    }
+  }
+});
+
 // إنشاء تطبيق Express
 const app = express();
 const server = http.createServer(app);
@@ -81,41 +93,59 @@ async function updatePhoneStatusInDB(phoneId, status, sessionData = null) {
 
 // إنشاء عميل WhatsApp جديد
 async function createWhatsAppClient(phoneId) {
+  logger.info(`بدء إنشاء عميل WhatsApp للهاتف: ${phoneId}`);
+  
   const sessionDir = path.join(SESSIONS_DIR, phoneId);
   
   if (!fs.existsSync(sessionDir)) {
+    logger.info(`إنشاء مجلد الجلسة: ${sessionDir}`);
     fs.mkdirSync(sessionDir, { recursive: true });
   }
   
+  logger.info(`تحميل حالة المصادقة من: ${sessionDir}`);
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   
+  logger.info(`إنشاء socket WhatsApp للهاتف: ${phoneId}`);
   const sock = makeWASocket({
     printQRInTerminal: true,
-    auth: state,
-    logger: pino({ level: 'warn' })
+    auth: state, 
+    logger: pino({ level: 'debug' }),
+    browser: ['WhatsBox', 'Chrome', '1.0.0'],
+    generateHighQualityLinkPreview: true
   });
   
+  logger.info(`إعداد معالجات الأحداث للهاتف: ${phoneId}`);
   sock.ev.on('creds.update', saveCreds);
   
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     
+    logger.info(`تحديث الاتصال للهاتف ${phoneId}:`, {
+      connection,
+      hasQR: !!qr,
+      lastDisconnect: lastDisconnect?.error?.output?.statusCode
+    });
+    
     if (qr) {
-      console.log(`QR Code received for phone ${phoneId}`);
+      logger.info(`تم استلام رمز QR للهاتف ${phoneId}`);
+      logger.debug(`محتوى رمز QR: ${qr.substring(0, 50)}...`);
+      
       await updateQRCodeInDB(phoneId, qr);
       io.emit('qr', { phoneId, qr });
+      logger.info(`تم إرسال رمز QR إلى العميل للهاتف: ${phoneId}`);
     }
     
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log(`Connection closed for ${phoneId}. Reconnecting: ${shouldReconnect}`);
+      logger.warn(`تم إغلاق الاتصال للهاتف ${phoneId}. إعادة الاتصال: ${shouldReconnect}`);
+      logger.debug(`سبب الإغلاق:`, lastDisconnect?.error);
       
       if (shouldReconnect) {
         await updatePhoneStatusInDB(phoneId, 'reconnecting');
         io.emit('reconnecting', { phoneId });
         
         delete activeClients[phoneId];
-        createWhatsAppClient(phoneId);
+        setTimeout(() => createWhatsAppClient(phoneId), 2000);
       } else {
         await updatePhoneStatusInDB(phoneId, 'inactive');
         io.emit('disconnected', { phoneId, reason: 'logged out' });
@@ -125,7 +155,7 @@ async function createWhatsAppClient(phoneId) {
     }
     
     if (connection === 'open') {
-      console.log(`Phone ${phoneId} connected successfully`);
+      logger.info(`تم ربط الهاتف ${phoneId} بنجاح`);
       await updatePhoneStatusInDB(phoneId, 'active');
       io.emit('ready', { phoneId });
     }
@@ -136,38 +166,31 @@ async function createWhatsAppClient(phoneId) {
 
 // معالجة اتصالات Socket.io
 io.on('connection', (socket) => {
-  console.log('New client connected:', socket.id);
+  logger.info(`عميل جديد متصل: ${socket.id}`);
 
   socket.on('connect_whatsapp', async (data) => {
     const { phoneId, phoneNumber, phoneName } = data;
     
     try {
-      console.log(`Request to connect WhatsApp for phone ${phoneId}`);
+      logger.info(`طلب ربط WhatsApp للهاتف ${phoneId}`, { phoneNumber, phoneName });
       
       if (activeClients[phoneId]) {
-        console.log(`Client already exists for phone ${phoneId}`);
+        logger.warn(`العميل موجود بالفعل للهاتف ${phoneId}`);
         socket.emit('whatsapp_status', { 
           phoneId, 
           status: 'already_initialized',
           message: 'WhatsApp client is already running for this phone' 
         });
         
-        // إرسال رمز QR إذا كان متوفراً
-        setTimeout(() => {
-          socket.emit('qr_generating', { phoneId });
-          // محاكاة توليد رمز QR جديد
-          const mockQR = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=mock-qr-${phoneId}-${Date.now()}`;
-          setTimeout(() => {
-            socket.emit('qr', { phoneId, qr: mockQR });
-          }, 2000);
-        }, 1000);
-        
         return;
       }
       
       // إرسال إشعار بدء التهيئة
+      logger.info(`بدء تهيئة WhatsApp للهاتف ${phoneId}`);
       socket.emit('whatsapp_initializing', { phoneId, status: 'initializing' });
       
+      // حفظ بيانات الهاتف في قاعدة البيانات
+      logger.info(`حفظ بيانات الهاتف ${phoneId} في قاعدة البيانات`);
       await supabase
         .from('connected_phones')
         .upsert({
@@ -181,13 +204,16 @@ io.on('connection', (socket) => {
         });
       
       // إرسال إشعار بدء توليد رمز QR
+      logger.info(`بدء توليد رمز QR للهاتف ${phoneId}`);
       socket.emit('qr_generating', { phoneId });
       
       const client = await createWhatsAppClient(phoneId);
       activeClients[phoneId] = client;
       
+      logger.info(`تم إنشاء وحفظ عميل WhatsApp للهاتف ${phoneId}`);
+      
     } catch (error) {
-      console.error(`Error connecting WhatsApp for phone ${phoneId}:`, error);
+      logger.error(`خطأ في ربط WhatsApp للهاتف ${phoneId}:`, error);
       socket.emit('whatsapp_error', { 
         phoneId, 
         error: error.message 
@@ -197,7 +223,7 @@ io.on('connection', (socket) => {
   
   socket.on('send_message', async ({ phoneId, to, message, messageId }) => {
     try {
-      console.log(`Sending message from phone ${phoneId} to ${to}`);
+      logger.info(`إرسال رسالة من الهاتف ${phoneId} إلى ${to}`);
       
       if (!activeClients[phoneId]) {
         throw new Error(`No active client found for phone ${phoneId}`);
@@ -209,18 +235,20 @@ io.on('connection', (socket) => {
       
       socket.emit('message_sent', { phoneId, messageId });
     } catch (error) {
-      console.error(`Error sending message from phone ${phoneId}:`, error);
+      logger.error(`خطأ في إرسال رسالة من الهاتف ${phoneId}:`, error);
       socket.emit('message_failed', { phoneId, messageId, error: error.message });
     }
   });
   
   socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
+    logger.info(`تم قطع اتصال العميل: ${socket.id}`);
   });
 });
 
 // تشغيل الخادم
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info(`الخادم يعمل على المنفذ ${PORT}`);
+  logger.info(`مجلد الجلسات: ${SESSIONS_DIR}`);
+  logger.info(`عدد العملاء النشطين: ${Object.keys(activeClients).length}`);
 });
