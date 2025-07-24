@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import supabase from '../config/supabase';
+import supabase, { testSupabaseConnection, fallbackStorage } from '../config/supabase';
 
 const MessageContext = createContext();
 
@@ -7,6 +7,8 @@ const initialState = {
   messages: [],
   connectedPhones: [],
   selectedPhone: null,
+  isSupabaseAvailable: false,
+  usingFallback: false,
   stats: {
     totalSent: 0,
     successful: 0,
@@ -106,6 +108,14 @@ const messageReducer = (state, action) => {
       };
       break;
       
+    case 'SET_SUPABASE_STATUS':
+      newState = {
+        ...state,
+        isSupabaseAvailable: action.payload.available,
+        usingFallback: action.payload.usingFallback
+      };
+      break;
+      
     default:
       return state;
   }
@@ -130,47 +140,59 @@ export const MessageProvider = ({ children }) => {
     dispatch({ type: 'UPDATE_STATS', payload: stats });
   }, [state.messages]);
   
-  // جلب الأرقام المتصلة من Supabase عند تحميل التطبيق
+  // Test Supabase connection and load phones
   useEffect(() => {
-    const fetchConnectedPhones = async () => {
+    const initializeData = async () => {
       try {
-        const { data, error } = await supabase
-          .from('connected_phones')
-          .select('*')
-          .order('created_at', { ascending: false });
-          
-        if (error) throw error;
+        // Test Supabase connection
+        const connectionTest = await testSupabaseConnection();
         
-        dispatch({ type: 'SET_CONNECTED_PHONES', payload: data });
+        if (connectionTest.success) {
+          // Supabase is available, fetch from there
+          const { data, error } = await supabase
+            .from('connected_phones')
+            .select('*')
+            .order('created_at', { ascending: false });
+            
+          if (error) throw error;
+          
+          dispatch({ type: 'SET_CONNECTED_PHONES', payload: data });
+          dispatch({ type: 'SET_SUPABASE_STATUS', payload: { available: true, usingFallback: false } });
+          
+          // Set up real-time subscription
+          const phonesSubscription = supabase
+            .channel('connected_phones_changes')
+            .on('postgres_changes', 
+              { event: '*', schema: 'public', table: 'connected_phones' }, 
+              (payload) => {
+                if (payload.eventType === 'INSERT') {
+                  dispatch({ type: 'ADD_CONNECTED_PHONE', payload: payload.new });
+                } else if (payload.eventType === 'UPDATE') {
+                  dispatch({ type: 'UPDATE_CONNECTED_PHONE', payload: payload.new });
+                } else if (payload.eventType === 'DELETE') {
+                  dispatch({ type: 'REMOVE_CONNECTED_PHONE', payload: payload.old.id });
+                }
+              }
+            )
+            .subscribe();
+          
+          return () => {
+            phonesSubscription.unsubscribe();
+          };
+        } else {
+          throw new Error('Supabase connection failed');
+        }
       } catch (error) {
-        console.error('Error fetching connected phones:', error);
+        console.warn('Supabase not available, using fallback storage:', error);
+        
+        // Use fallback storage
+        const fallbackPhones = fallbackStorage.getPhones();
+        dispatch({ type: 'SET_CONNECTED_PHONES', payload: fallbackPhones });
+        dispatch({ type: 'SET_SUPABASE_STATUS', payload: { available: false, usingFallback: true } });
       }
     };
     
-    fetchConnectedPhones();
-    
-    // إعداد الاستماع لتغييرات الأرقام المتصلة في الوقت الحقيقي
-    const phonesSubscription = supabase
-      .channel('connected_phones_changes')
-      .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'connected_phones' }, 
-        (payload) => {
-          // تحديث الأرقام المتصلة بناءً على نوع التغيير
-          if (payload.eventType === 'INSERT') {
-            dispatch({ type: 'ADD_CONNECTED_PHONE', payload: payload.new });
-          } else if (payload.eventType === 'UPDATE') {
-            dispatch({ type: 'UPDATE_CONNECTED_PHONE', payload: payload.new });
-          } else if (payload.eventType === 'DELETE') {
-            dispatch({ type: 'REMOVE_CONNECTED_PHONE', payload: payload.old.id });
-          }
-        }
-      )
-      .subscribe();
-    
-    // تنظيف الاشتراكات عند إزالة المكون
-    return () => {
-      phonesSubscription.unsubscribe();
-    };
+    initializeData();
   }, []);
   
   return (

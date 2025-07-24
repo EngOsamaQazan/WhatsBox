@@ -17,11 +17,11 @@ import QrCodeIcon from '@mui/icons-material/QrCode';
 import KeyIcon from '@mui/icons-material/Key';
 import { v4 as uuidv4 } from 'uuid';
 import whatsAppSocketService from '../services/whatsappSocket';
-import supabase from '../config/supabase';
+import supabase, { fallbackStorage } from '../config/supabase';
 
 function ConnectedPhones() {
   const { state, dispatch } = useMessages();
-  const { connectedPhones } = state;
+  const { connectedPhones, isSupabaseAvailable, usingFallback } = state;
   
   const [openDialog, setOpenDialog] = useState(false);
   const [dialogType, setDialogType] = useState('');
@@ -246,7 +246,7 @@ function ConnectedPhones() {
       // إنشاء معرف فريد للرقم
       const phoneId = uuidv4();
       
-      // إعداد بيانات الرقم
+      // إعداد بيانات الرقم  
       const phoneData = {
         id: phoneId,
         phone_number: formData.phoneNumber,
@@ -259,15 +259,82 @@ function ConnectedPhones() {
         last_activity: new Date().toISOString()
       };
       
-      // التحقق من اتصال Supabase قبل المحاولة
-      console.log('Attempting to connect to Supabase...');
-      console.log('Supabase URL:', supabase.supabaseUrl);
+      let data = [phoneData];
       
-      // إضافة الرقم إلى قاعدة البيانات
-      const { data, error } = await supabase
-        .from('connected_phones')
-        .insert([phoneData])
-        .select();
+      if (isSupabaseAvailable) {
+        // محاولة إضافة الرقم إلى Supabase
+        try {
+          const { data: supabaseData, error } = await supabase
+            .from('connected_phones')
+            .insert([phoneData])
+            .select();
+            
+          if (error) throw error;
+          data = supabaseData;
+        } catch (supabaseError) {
+          console.warn('Supabase insert failed, using fallback:', supabaseError);
+          // التبديل إلى التخزين المحلي
+          fallbackStorage.addPhone(phoneData);
+          dispatch({ type: 'SET_SUPABASE_STATUS', payload: { available: false, usingFallback: true } });
+        }
+      } else {
+        // استخدام التخزين المحلي مباشرة
+        const success = fallbackStorage.addPhone(phoneData);
+        if (!success) {
+          throw new Error('فشل في حفظ البيانات في التخزين المحلي');
+        }
+      }
+      
+      // إضافة الرقم إلى حالة التطبيق
+      dispatch({ type: 'ADD_CONNECTED_PHONE', payload: data[0] });
+      
+      // إغلاق مربع الحوار
+      setOpenDialog(false);
+      
+      // إذا كان نوع الاتصال هو QR، فتح مربع حوار QR
+      if (formData.connectionType === 'qr') {
+        handleOpenQRDialog(phoneId);
+      }
+    } catch (error) {
+      console.error('Error adding phone:', error);
+      setError(error.message || 'حدث خطأ غير متوقع');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // حذف رقم
+  const handleDeletePhone = async (phoneId) => {
+    try {
+      // إرسال طلب لفصل الرقم من الخادم
+      whatsAppSocketService.sendToServer('disconnect_whatsapp', { phoneId });
+      
+      if (isSupabaseAvailable) {
+        // محاولة حذف الرقم من Supabase
+        try {
+          const { error } = await supabase
+            .from('connected_phones')
+            .delete()
+            .eq('id', phoneId);
+            
+          if (error) throw error;
+        } catch (supabaseError) {
+          console.warn('Supabase delete failed, using fallback:', supabaseError);
+          fallbackStorage.deletePhone(phoneId);
+          dispatch({ type: 'SET_SUPABASE_STATUS', payload: { available: false, usingFallback: true } });
+        }
+      } else {
+        // استخدام التخزين المحلي مباشرة
+        fallbackStorage.deletePhone(phoneId);
+      }
+      
+      // حذف الرقم من حالة التطبيق
+      dispatch({ type: 'REMOVE_CONNECTED_PHONE', payload: phoneId });
+    } catch (error) {
+      console.error('Error deleting phone:', error);
+      setError(error.message);
+    }
+  };
         
       if (error) {
         console.error('Supabase error:', error);
@@ -348,6 +415,12 @@ function ConnectedPhones() {
         <Typography variant="h4" component="h1" gutterBottom>
           الأرقام المتصلة
         </Typography>
+        
+        {usingFallback && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            يتم استخدام التخزين المحلي حالياً. قد لا تتم مزامنة البيانات مع الخادم.
+          </Alert>
+        )}
         
         <Button
           variant="contained"
